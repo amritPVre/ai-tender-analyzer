@@ -165,7 +165,15 @@ def process_document(pdf_bytes: bytes, doc_name: str):
         progress.empty()
 
     except Exception as e:
-        st.session_state["processing_error"] = f"Processing failed: {e}"
+        err_msg = str(e)
+        if "504" in err_msg or "gateway" in err_msg.lower() or "timeout" in err_msg.lower():
+            st.session_state["processing_error"] = (
+                "The AI API timed out (504). This can happen on large tenders. "
+                "The app now retries automatically — please click **Re-analyze** to try again. "
+                f"Details: {err_msg}"
+            )
+        else:
+            st.session_state["processing_error"] = f"Processing failed: {err_msg}"
         progress.empty()
 
 

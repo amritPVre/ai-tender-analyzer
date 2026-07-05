@@ -18,7 +18,15 @@ DEEPSEEK_MODEL = "deepseek-ai/deepseek-v4-flash"
 # RAG settings (~4 chars per token)
 CHUNK_CHARS = 3200  # ~800 tokens
 OVERLAP_CHARS = 600  # ~150 tokens
-RETRIEVE_K = 15
+RETRIEVE_K = 10
+
+# LLM / API settings (tuned for Streamlit Cloud timeouts)
+API_TIMEOUT_SECONDS = int(os.getenv("API_TIMEOUT_SECONDS", "180"))
+LLM_MAX_TOKENS = int(os.getenv("LLM_MAX_TOKENS", "8192"))
+MAX_CONTEXT_CHARS = int(os.getenv("MAX_CONTEXT_CHARS", "24000"))
+API_MAX_RETRIES = int(os.getenv("API_MAX_RETRIES", "3"))
+# Thinking mode is slow and often causes NVIDIA gateway 504 timeouts on Cloud
+DEEPSEEK_ENABLE_THINKING = os.getenv("DEEPSEEK_ENABLE_THINKING", "false").lower() == "true"
 
 # PDF detection
 SCANNED_THRESHOLD = 80  # avg chars per page

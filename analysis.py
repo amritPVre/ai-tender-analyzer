@@ -3,6 +3,7 @@
 from datetime import datetime
 from typing import Any
 
+from config import RETRIEVE_K
 from llm import call_llm, parse_json_response
 from rag import RAGPipeline
 
@@ -153,13 +154,13 @@ def run_all_analyses(
     """Run all analysis sections and return structured results."""
     results: dict[str, Any] = {}
     sections = [
-        ("summary", SUMMARY_PROMPT, RETRIEVAL_QUERIES["summary"], 15, True),
-        ("technical", TECHNICAL_PROMPT, RETRIEVAL_QUERIES["technical"], 20, False),
-        ("procedure", PROCEDURE_PROMPT, RETRIEVAL_QUERIES["procedure"], 15, False),
-        ("checklist", CHECKLIST_PROMPT, RETRIEVAL_QUERIES["checklist"], 15, True),
-        ("dates", DATES_PROMPT, RETRIEVAL_QUERIES["dates"], 15, True),
-        ("commercial", COMMERCIAL_PROMPT, RETRIEVAL_QUERIES["commercial"], 15, True),
-        ("eligibility", ELIGIBILITY_PROMPT, RETRIEVAL_QUERIES["eligibility"], 15, True),
+        ("summary", SUMMARY_PROMPT, RETRIEVAL_QUERIES["summary"], RETRIEVE_K, True),
+        ("technical", TECHNICAL_PROMPT, RETRIEVAL_QUERIES["technical"], RETRIEVE_K, False),
+        ("procedure", PROCEDURE_PROMPT, RETRIEVAL_QUERIES["procedure"], RETRIEVE_K, False),
+        ("checklist", CHECKLIST_PROMPT, RETRIEVAL_QUERIES["checklist"], RETRIEVE_K, True),
+        ("dates", DATES_PROMPT, RETRIEVAL_QUERIES["dates"], RETRIEVE_K, True),
+        ("commercial", COMMERCIAL_PROMPT, RETRIEVAL_QUERIES["commercial"], RETRIEVE_K, True),
+        ("eligibility", ELIGIBILITY_PROMPT, RETRIEVAL_QUERIES["eligibility"], RETRIEVE_K, True),
     ]
 
     for i, (key, prompt, query, k, is_json) in enumerate(sections):
