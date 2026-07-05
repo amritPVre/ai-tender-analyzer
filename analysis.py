@@ -145,31 +145,61 @@ RETRIEVAL_QUERIES = {
     "eligibility": "eligibility criteria turnover net worth experience deviation specifications standards",
 }
 
+PROMPTS = {
+    "summary": SUMMARY_PROMPT,
+    "technical": TECHNICAL_PROMPT,
+    "procedure": PROCEDURE_PROMPT,
+    "checklist": CHECKLIST_PROMPT,
+    "dates": DATES_PROMPT,
+    "commercial": COMMERCIAL_PROMPT,
+    "eligibility": ELIGIBILITY_PROMPT,
+}
+
+# Ordered analysis steps — one API call each
+ANALYSIS_SECTIONS = [
+    {"key": "summary", "label": "Document Summary", "is_json": True},
+    {"key": "technical", "label": "Technical Requirements", "is_json": False},
+    {"key": "procedure", "label": "Tender Procedure", "is_json": False},
+    {"key": "checklist", "label": "Submission Checklist", "is_json": True},
+    {"key": "dates", "label": "Key Dates", "is_json": True},
+    {"key": "commercial", "label": "Commercial & Risk", "is_json": True},
+    {"key": "eligibility", "label": "Eligibility & Deviations", "is_json": True},
+]
+
+
+def run_section_analysis(rag: RAGPipeline, routing_mode: str, section_key: str) -> Any:
+    """Run a single analysis section (one LLM call)."""
+    import time
+
+    from config import API_CALL_DELAY_SECONDS
+
+    if section_key not in PROMPTS:
+        raise ValueError(f"Unknown analysis section: {section_key}")
+
+    prompt = PROMPTS[section_key]
+    query = RETRIEVAL_QUERIES[section_key]
+    is_json = next(s["is_json"] for s in ANALYSIS_SECTIONS if s["key"] == section_key)
+
+    chunks = rag.retrieve(query, k=RETRIEVE_K)
+    raw = call_llm(prompt, chunks, routing_mode)
+    result = parse_json_response(raw) if is_json else raw
+
+    time.sleep(API_CALL_DELAY_SECONDS)
+    return result
+
 
 def run_all_analyses(
     rag: RAGPipeline,
     routing_mode: str,
     progress_callback=None,
 ) -> dict[str, Any]:
-    """Run all analysis sections and return structured results."""
+    """Run all sections sequentially (legacy helper — prefer run_section_analysis)."""
     results: dict[str, Any] = {}
-    sections = [
-        ("summary", SUMMARY_PROMPT, RETRIEVAL_QUERIES["summary"], RETRIEVE_K, True),
-        ("technical", TECHNICAL_PROMPT, RETRIEVAL_QUERIES["technical"], RETRIEVE_K, False),
-        ("procedure", PROCEDURE_PROMPT, RETRIEVAL_QUERIES["procedure"], RETRIEVE_K, False),
-        ("checklist", CHECKLIST_PROMPT, RETRIEVAL_QUERIES["checklist"], RETRIEVE_K, True),
-        ("dates", DATES_PROMPT, RETRIEVAL_QUERIES["dates"], RETRIEVE_K, True),
-        ("commercial", COMMERCIAL_PROMPT, RETRIEVAL_QUERIES["commercial"], RETRIEVE_K, True),
-        ("eligibility", ELIGIBILITY_PROMPT, RETRIEVAL_QUERIES["eligibility"], RETRIEVE_K, True),
-    ]
-
-    for i, (key, prompt, query, k, is_json) in enumerate(sections):
+    for i, section in enumerate(ANALYSIS_SECTIONS):
+        key = section["key"]
         if progress_callback:
-            progress_callback(i, len(sections), key)
-        chunks = rag.retrieve(query, k=k)
-        raw = call_llm(prompt, chunks, routing_mode)
-        results[key] = parse_json_response(raw) if is_json else raw
-
+            progress_callback(i, len(ANALYSIS_SECTIONS), key)
+        results[key] = run_section_analysis(rag, routing_mode, key)
     return results
 
 

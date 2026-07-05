@@ -10,7 +10,7 @@ from typing import Any
 import pandas as pd
 import streamlit as st
 
-from analysis import is_date_urgent, run_all_analyses
+from analysis import ANALYSIS_SECTIONS, is_date_urgent, run_section_analysis
 from config import COLORS, NVIDIA_DEEPSEEK_API_KEY, NVIDIA_MINIMAX_API_KEY
 from export import generate_excel_checklist, generate_pdf_report
 from pdf_extraction import detect_pdf_type, extract_document, is_solar_related
@@ -40,13 +40,17 @@ def reset_session_state():
     keys_to_clear = [
         "pdf_bytes", "doc_name", "routing_mode", "page_count", "avg_chars",
         "document_text", "rag", "chunk_count", "analysis", "routing_banner",
-        "checklist_state", "eligibility_state", "processed", "processing_error",
+        "checklist_state", "eligibility_state", "doc_ready", "analysis_status",
+        "analysis_errors", "processing_error", "pdf_report_bytes", "xlsx_bytes",
     ]
     for key in keys_to_clear:
         if key in st.session_state:
             del st.session_state[key]
     st.session_state["checklist_state"] = {}
     st.session_state["eligibility_state"] = {}
+    st.session_state["analysis"] = {}
+    st.session_state["analysis_status"] = {}
+    st.session_state["analysis_errors"] = {}
 
 
 def init_session_state():
@@ -59,11 +63,13 @@ def init_session_state():
         "document_text": "",
         "rag": None,
         "chunk_count": 0,
-        "analysis": None,
+        "analysis": {},
+        "analysis_status": {},
+        "analysis_errors": {},
         "routing_banner": "",
         "checklist_state": {},
         "eligibility_state": {},
-        "processed": False,
+        "doc_ready": False,
         "processing_error": None,
     }
     for key, val in defaults.items():
@@ -71,8 +77,73 @@ def init_session_state():
             st.session_state[key] = val
 
 
-def process_document(pdf_bytes: bytes, doc_name: str):
-    """Full pipeline: detect → extract → embed → analyze."""
+def _init_analysis_state():
+    st.session_state["analysis"] = {}
+    st.session_state["analysis_status"] = {s["key"]: "pending" for s in ANALYSIS_SECTIONS}
+    st.session_state["analysis_errors"] = {}
+    st.session_state["checklist_state"] = {}
+    st.session_state["eligibility_state"] = {}
+
+
+def format_api_error(exc: Exception) -> str:
+    err_msg = str(exc)
+    if "503" in err_msg or "ResourceExhausted" in err_msg:
+        return (
+            "NVIDIA API rate limit reached (503). Wait a moment, then run the next step again. "
+            f"Details: {err_msg}"
+        )
+    if "504" in err_msg or "gateway" in err_msg.lower() or "timeout" in err_msg.lower():
+        return (
+            "The AI API timed out. Try running this step again. "
+            f"Details: {err_msg}"
+        )
+    return err_msg
+
+
+def run_analysis_step(section_key: str) -> bool:
+    """Run one analysis section. Returns True on success."""
+    rag = st.session_state.get("rag")
+    if rag is None:
+        st.session_state["processing_error"] = "Document index missing. Re-upload the PDF."
+        return False
+
+    st.session_state["analysis_status"][section_key] = "running"
+    try:
+        result = run_section_analysis(rag, st.session_state["routing_mode"], section_key)
+        st.session_state["analysis"][section_key] = result
+        st.session_state["analysis_status"][section_key] = "done"
+        st.session_state["analysis_errors"].pop(section_key, None)
+        return True
+    except Exception as e:
+        st.session_state["analysis_status"][section_key] = "error"
+        st.session_state["analysis_errors"][section_key] = format_api_error(e)
+        return False
+
+
+def get_next_pending_section() -> str | None:
+    for section in ANALYSIS_SECTIONS:
+        if st.session_state["analysis_status"].get(section["key"]) == "pending":
+            return section["key"]
+    return None
+
+
+def get_next_error_section() -> str | None:
+    for section in ANALYSIS_SECTIONS:
+        if st.session_state["analysis_status"].get(section["key"]) == "error":
+            return section["key"]
+    return None
+
+
+def analysis_completion_count() -> tuple[int, int]:
+    done = sum(
+        1 for s in ANALYSIS_SECTIONS
+        if st.session_state["analysis_status"].get(s["key"]) == "done"
+    )
+    return done, len(ANALYSIS_SECTIONS)
+
+
+def ingest_document(pdf_bytes: bytes, doc_name: str):
+    """Phase 1: detect PDF type, extract text, build RAG index (no bulk AI analysis)."""
     st.session_state["processing_error"] = None
 
     # Validate API keys based on routing (we detect first)
@@ -130,56 +201,95 @@ def process_document(pdf_bytes: bytes, doc_name: str):
         chunk_count = rag.build(document_text)
         st.session_state["rag"] = rag
         st.session_state["chunk_count"] = chunk_count
-        progress.progress(55, text=f"Indexed {chunk_count} document chunks. Running AI analysis…")
 
         if chunk_count == 0:
             st.session_state["processing_error"] = "No extractable text found in this document."
+            st.session_state["doc_ready"] = False
             progress.empty()
             return
 
-        # Analysis — all tabs at once
-        section_labels = {
-            "summary": "Document Summary",
-            "technical": "Technical Requirements",
-            "procedure": "Tender Procedure",
-            "checklist": "Submission Checklist",
-            "dates": "Key Dates",
-            "commercial": "Commercial & Risk",
-            "eligibility": "Eligibility & Deviations",
-        }
+        progress.progress(100, text=f"Indexed {chunk_count} chunks — ready for step-by-step analysis.")
+        _init_analysis_state()
+        st.session_state["doc_ready"] = True
 
-        def analysis_progress(current, total, section_key):
-            pct = 55 + int((current / total) * 40)
-            progress.progress(
-                pct,
-                text=f"Analyzing: {section_labels.get(section_key, section_key)} ({current + 1}/{total})…",
-            )
-
-        analysis = run_all_analyses(rag, routing_mode, progress_callback=analysis_progress)
-        st.session_state["analysis"] = analysis
-        st.session_state["processed"] = True
-        st.session_state["checklist_state"] = {}
-        st.session_state["eligibility_state"] = {}
-
-        progress.progress(100, text="Analysis complete!")
         progress.empty()
 
     except Exception as e:
-        err_msg = str(e)
-        if "504" in err_msg or "gateway" in err_msg.lower() or "timeout" in err_msg.lower():
-            st.session_state["processing_error"] = (
-                "The AI API timed out (504). This can happen on large tenders. "
-                "The app now retries automatically — please click **Re-analyze** to try again. "
-                f"Details: {err_msg}"
-            )
-        else:
-            st.session_state["processing_error"] = f"Processing failed: {err_msg}"
+        st.session_state["processing_error"] = f"Ingestion failed: {format_api_error(e)}"
+        st.session_state["doc_ready"] = False
         progress.empty()
 
 
 # ---------------------------------------------------------------------------
 # Render helpers
 # ---------------------------------------------------------------------------
+
+def render_section_gate(section_key: str, label: str, render_fn):
+    """Show generate button until section is complete, then render content."""
+    status = st.session_state["analysis_status"].get(section_key, "pending")
+
+    if status == "done":
+        data = st.session_state["analysis"].get(section_key)
+        if section_key in ("technical", "procedure"):
+            render_fn(data or "")
+        else:
+            render_fn(data or {})
+        return
+
+    if status == "running":
+        st.info(f"Generating **{label}**… please wait.")
+        return
+
+    st.info(
+        f"**{label}** has not been generated yet. "
+        "Use **Run Next Step** in the sidebar, or generate this section now."
+    )
+    if status == "error":
+        st.error(st.session_state["analysis_errors"].get(section_key, "Unknown error"))
+
+    if st.button(f"▶ Generate {label}", key=f"gen_{section_key}", type="primary"):
+        with st.spinner(f"Generating {label}…"):
+            run_analysis_step(section_key)
+        st.rerun()
+
+
+def render_analysis_sidebar():
+    """Sidebar controls for step-by-step AI analysis."""
+    done, total = analysis_completion_count()
+    st.markdown("### 🔬 Analysis Steps")
+    st.caption("One AI call per step — avoids API rate limits.")
+    st.progress(done / total, text=f"{done}/{total} sections complete")
+
+    status_icons = {"pending": "⏳", "running": "🔄", "done": "✅", "error": "❌"}
+    for section in ANALYSIS_SECTIONS:
+        key = section["key"]
+        status = st.session_state["analysis_status"].get(key, "pending")
+        icon = status_icons.get(status, "⏳")
+        st.markdown(f"{icon} {section['label']}")
+
+    st.markdown("---")
+    next_key = get_next_pending_section()
+    if next_key:
+        next_label = next(s["label"] for s in ANALYSIS_SECTIONS if s["key"] == next_key)
+        if st.button("▶ Run Next Step", use_container_width=True, type="primary"):
+            with st.spinner(f"Running: {next_label}…"):
+                run_analysis_step(next_key)
+            st.rerun()
+    else:
+        st.success("All analysis steps complete.")
+
+    err_key = get_next_error_section()
+    if err_key and st.button("🔁 Retry Failed Step", use_container_width=True):
+        err_label = next(s["label"] for s in ANALYSIS_SECTIONS if s["key"] == err_key)
+        st.session_state["analysis_status"][err_key] = "pending"
+        with st.spinner(f"Retrying: {err_label}…"):
+            run_analysis_step(err_key)
+        st.rerun()
+
+    if done > 0 and st.button("🔄 Reset Analysis", use_container_width=True):
+        _init_analysis_state()
+        st.rerun()
+
 
 def render_header():
     st.markdown(
@@ -450,10 +560,17 @@ def render_eligibility_tab(elig_data: dict):
 def render_export_tab(analysis: dict, doc_name: str):
     st.markdown('<div class="section-title">Export Analysis</div>', unsafe_allow_html=True)
 
+    done, total = analysis_completion_count()
+    if done < total:
+        st.warning(
+            f"Export uses completed sections only ({done}/{total} done). "
+            "Run remaining analysis steps in the sidebar for a full report."
+        )
+
     col1, col2 = st.columns(2)
     with col1:
         st.markdown("**Generate Full Report (PDF)**")
-        st.caption("Compiles all analysis sections into a formatted PDF with BAESS.APP branding.")
+        st.caption("Compiles completed analysis sections into a formatted PDF.")
         if st.button("Generate Full Report", type="primary", key="gen_pdf"):
             with st.spinner("Generating PDF report…"):
                 try:
@@ -475,7 +592,15 @@ def render_export_tab(analysis: dict, doc_name: str):
         st.markdown("**Export Checklist to Excel**")
         st.caption("Structured workbook with one sheet per checklist category.")
         checklist = analysis.get("checklist", {})
-        if st.button("Export Checklist to Excel", type="primary", key="gen_xlsx"):
+        checklist_ready = st.session_state["analysis_status"].get("checklist") == "done"
+        if not checklist_ready:
+            st.caption("Generate the **Submission Checklist** step first.")
+        if st.button(
+            "Export Checklist to Excel",
+            type="primary",
+            key="gen_xlsx",
+            disabled=not checklist_ready,
+        ):
             with st.spinner("Generating Excel workbook…"):
                 try:
                     xlsx_bytes = generate_excel_checklist(checklist)
@@ -512,9 +637,9 @@ def main():
 
         if uploaded is not None:
             pdf_bytes = uploaded.read()
-            if st.session_state.get("doc_name") != uploaded.name or not st.session_state.get("processed"):
-                with st.spinner("Processing document…"):
-                    process_document(pdf_bytes, uploaded.name)
+            if st.session_state.get("doc_name") != uploaded.name or not st.session_state.get("doc_ready"):
+                with st.spinner("Indexing document…"):
+                    ingest_document(pdf_bytes, uploaded.name)
 
         if st.session_state.get("routing_banner"):
             st.info(st.session_state["routing_banner"])
@@ -526,7 +651,7 @@ def main():
             else:
                 st.error(err)
 
-        if st.session_state.get("processed"):
+        if st.session_state.get("doc_ready"):
             st.markdown("---")
             st.markdown("### 📊 Document Metadata")
             st.markdown(f"**Name:** {st.session_state['doc_name']}")
@@ -541,10 +666,12 @@ def main():
             st.markdown(f"**RAG Chunks:** {st.session_state['chunk_count']}")
             st.markdown(f"**Extracted Text:** {len(st.session_state.get('document_text', '')):,} chars")
 
-            if st.button("🔄 Re-analyze", use_container_width=True):
+            render_analysis_sidebar()
+
+            if st.button("🔄 Re-index Document", use_container_width=True):
                 if st.session_state.get("pdf_bytes"):
-                    with st.spinner("Re-running analysis…"):
-                        process_document(st.session_state["pdf_bytes"], st.session_state["doc_name"])
+                    with st.spinner("Re-indexing document…"):
+                        ingest_document(st.session_state["pdf_bytes"], st.session_state["doc_name"])
                     st.rerun()
 
             if st.button("🗑️ Clear & Upload New Document", use_container_width=True):
@@ -559,15 +686,24 @@ def main():
         )
 
     # ---- Main content ----
-    if not st.session_state.get("processed") or not st.session_state.get("analysis"):
+    if not st.session_state.get("doc_ready"):
         render_upload_prompt()
         st.markdown("#### How it works")
         steps = st.columns(4)
         steps[0].markdown("**1. Upload**\n\nUpload your tender PDF")
-        steps[1].markdown("**2. Detect**\n\nAuto-detect scanned vs text PDF")
-        steps[2].markdown("**3. Analyze**\n\nRAG + AI extracts 8 analysis views")
+        steps[1].markdown("**2. Index**\n\nExtract text & build search index")
+        steps[2].markdown("**3. Analyze**\n\nRun 7 steps one at a time")
         steps[3].markdown("**4. Export**\n\nDownload PDF report & Excel checklist")
         return
+
+    done, total = analysis_completion_count()
+    if done == 0:
+        st.success(
+            "Document indexed successfully. Open the sidebar and click **Run Next Step** "
+            "to begin AI analysis one section at a time."
+        )
+    elif done < total:
+        st.info(f"Analysis in progress: **{done}/{total}** sections complete. Continue in the sidebar.")
 
     analysis = st.session_state["analysis"]
 
@@ -583,19 +719,19 @@ def main():
     ])
 
     with tabs[0]:
-        render_summary_tab(analysis.get("summary", {}))
+        render_section_gate("summary", "Document Summary", render_summary_tab)
     with tabs[1]:
-        render_technical_tab(analysis.get("technical", ""))
+        render_section_gate("technical", "Technical Requirements", render_technical_tab)
     with tabs[2]:
-        render_procedure_tab(analysis.get("procedure", ""))
+        render_section_gate("procedure", "Tender Procedure", render_procedure_tab)
     with tabs[3]:
-        render_checklist_tab(analysis.get("checklist", {}))
+        render_section_gate("checklist", "Submission Checklist", render_checklist_tab)
     with tabs[4]:
-        render_dates_tab(analysis.get("dates", {}))
+        render_section_gate("dates", "Key Dates", render_dates_tab)
     with tabs[5]:
-        render_commercial_tab(analysis.get("commercial", {}))
+        render_section_gate("commercial", "Commercial & Risk", render_commercial_tab)
     with tabs[6]:
-        render_eligibility_tab(analysis.get("eligibility", {}))
+        render_section_gate("eligibility", "Eligibility & Deviations", render_eligibility_tab)
     with tabs[7]:
         render_export_tab(analysis, st.session_state["doc_name"])
 

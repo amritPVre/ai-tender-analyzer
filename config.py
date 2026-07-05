@@ -25,6 +25,7 @@ API_TIMEOUT_SECONDS = int(os.getenv("API_TIMEOUT_SECONDS", "180"))
 LLM_MAX_TOKENS = int(os.getenv("LLM_MAX_TOKENS", "8192"))
 MAX_CONTEXT_CHARS = int(os.getenv("MAX_CONTEXT_CHARS", "24000"))
 API_MAX_RETRIES = int(os.getenv("API_MAX_RETRIES", "3"))
+API_CALL_DELAY_SECONDS = int(os.getenv("API_CALL_DELAY_SECONDS", "4"))
 # Thinking mode is slow and often causes NVIDIA gateway 504 timeouts on Cloud
 DEEPSEEK_ENABLE_THINKING = os.getenv("DEEPSEEK_ENABLE_THINKING", "false").lower() == "true"
 

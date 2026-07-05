@@ -87,7 +87,9 @@ def _chat_with_retry(client: OpenAI, **kwargs):
                 raise
             if attempt >= API_MAX_RETRIES - 1:
                 raise
-            time.sleep(min(2 ** attempt * 4, 30))
+            # Longer backoff for rate-limit / resource exhaustion (503)
+            wait = min(2 ** attempt * (8 if status == 503 else 4), 45)
+            time.sleep(wait)
 
     if last_error:
         raise last_error
