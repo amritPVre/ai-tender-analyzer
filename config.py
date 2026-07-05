@@ -23,9 +23,12 @@ RETRIEVE_K = 10
 # LLM / API settings (tuned for Streamlit Cloud timeouts)
 API_TIMEOUT_SECONDS = int(os.getenv("API_TIMEOUT_SECONDS", "180"))
 LLM_MAX_TOKENS = int(os.getenv("LLM_MAX_TOKENS", "8192"))
+TECHNICAL_MAX_TOKENS = int(os.getenv("TECHNICAL_MAX_TOKENS", "4096"))
 MAX_CONTEXT_CHARS = int(os.getenv("MAX_CONTEXT_CHARS", "24000"))
-API_MAX_RETRIES = int(os.getenv("API_MAX_RETRIES", "3"))
-API_CALL_DELAY_SECONDS = int(os.getenv("API_CALL_DELAY_SECONDS", "4"))
+TECHNICAL_CONTEXT_CHARS = int(os.getenv("TECHNICAL_CONTEXT_CHARS", "14000"))
+API_MAX_RETRIES = int(os.getenv("API_MAX_RETRIES", "4"))
+API_CALL_DELAY_SECONDS = int(os.getenv("API_CALL_DELAY_SECONDS", "6"))
+TECHNICAL_RETRIEVE_K = int(os.getenv("TECHNICAL_RETRIEVE_K", "6"))
 # Thinking mode is slow and often causes NVIDIA gateway 504 timeouts on Cloud
 DEEPSEEK_ENABLE_THINKING = os.getenv("DEEPSEEK_ENABLE_THINKING", "false").lower() == "true"
 

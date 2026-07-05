@@ -25,22 +25,33 @@ SUMMARY_PROMPT = """Analyze the tender and return a JSON object with these exact
 }
 Return ONLY valid JSON."""
 
-TECHNICAL_PROMPT = """Extract ALL technical requirements from this solar tender document.
-Organize into markdown with these sub-sections (include all that apply, note N/A if not found):
-## Solar PV Modules
-## Inverters
-## Mounting Structure
-## DC and AC Cabling
-## Monitoring & SCADA
-## Transformers and HV Equipment
-## Civil Works
-## Earthing and Lightning Protection
-## Safety and Access
-## Grid Interconnection
-## Project-Specific Requirements
+TECHNICAL_PROMPT = """Extract technical requirements from this solar tender for the specified sections only.
+Use markdown bullet points with spec values where stated. Max 15 bullets per subsection.
+State N/A if a subsection has no requirements in the excerpts."""
 
-Each bullet must be a specific, actionable requirement with values or references from the document.
-Be exhaustive — do not summarize or omit requirements."""
+# Smaller batches — one API call each when running the Technical step
+TECHNICAL_BATCHES = [
+    {
+        "title": "PV Modules & Inverters",
+        "query": "solar PV modules efficiency power tolerance IEC 61215 61730 BIS ALMM inverter grid LVRT HVRT",
+        "sections": "## Solar PV Modules\n## Inverters",
+    },
+    {
+        "title": "Mounting, Cabling & SCADA",
+        "query": "mounting structure wind load cabling DC AC SCADA monitoring data logger transformer",
+        "sections": "## Mounting Structure\n## DC and AC Cabling\n## Monitoring & SCADA\n## Transformers and HV Equipment",
+    },
+    {
+        "title": "Civil, Earthing & Safety",
+        "query": "civil works fencing road earthing lightning protection safety access lighting signage",
+        "sections": "## Civil Works\n## Earthing and Lightning Protection\n## Safety and Access",
+    },
+    {
+        "title": "Grid & Project-Specific",
+        "query": "grid interconnection metering protection relay export limitation project specific technical requirements",
+        "sections": "## Grid Interconnection\n## Project-Specific Requirements",
+    },
+]
 
 PROCEDURE_PROMPT = """Produce a numbered step-by-step guide for preparing and submitting the bid for this specific solar EPC tender in India.
 Cover all of these steps (tailor to document specifics):
@@ -158,7 +169,7 @@ PROMPTS = {
 # Ordered analysis steps — one API call each
 ANALYSIS_SECTIONS = [
     {"key": "summary", "label": "Document Summary", "is_json": True},
-    {"key": "technical", "label": "Technical Requirements", "is_json": False},
+    {"key": "technical", "label": "Technical Requirements (4 parts)", "is_json": False},
     {"key": "procedure", "label": "Tender Procedure", "is_json": False},
     {"key": "checklist", "label": "Submission Checklist", "is_json": True},
     {"key": "dates", "label": "Key Dates", "is_json": True},
@@ -167,11 +178,73 @@ ANALYSIS_SECTIONS = [
 ]
 
 
-def run_section_analysis(rag: RAGPipeline, routing_mode: str, section_key: str) -> Any:
-    """Run a single analysis section (one LLM call)."""
+def run_technical_analysis(
+    rag: RAGPipeline,
+    routing_mode: str,
+    progress_callback=None,
+) -> str:
+    """Run technical analysis as 4 smaller API calls to avoid timeouts."""
+    import time
+
+    from config import (
+        API_CALL_DELAY_SECONDS,
+        TECHNICAL_CONTEXT_CHARS,
+        TECHNICAL_MAX_TOKENS,
+        TECHNICAL_RETRIEVE_K,
+    )
+
+    parts: list[str] = []
+    total = len(TECHNICAL_BATCHES)
+
+    # Extra pause after summary step before heavy technical work
+    time.sleep(API_CALL_DELAY_SECONDS)
+
+    for i, batch in enumerate(TECHNICAL_BATCHES):
+        if progress_callback:
+            progress_callback(i, total, batch["title"])
+
+        prompt = (
+            f"{TECHNICAL_PROMPT}\n\n"
+            f"Include ONLY these markdown subsections:\n{batch['sections']}"
+        )
+        chunks = rag.retrieve(batch["query"], k=TECHNICAL_RETRIEVE_K)
+        raw = call_llm(
+            prompt,
+            chunks,
+            routing_mode,
+            max_tokens=TECHNICAL_MAX_TOKENS,
+            max_context_chars=TECHNICAL_CONTEXT_CHARS,
+            temperature=0.4,
+        )
+        parts.append(raw.strip())
+        time.sleep(API_CALL_DELAY_SECONDS)
+
+    return "\n\n".join(parts)
+
+
+def get_combined_technical(analysis: dict) -> str:
+    """Return technical content from analysis dict."""
+    if not analysis:
+        return ""
+    tech = analysis.get("technical")
+    if isinstance(tech, str) and tech.strip():
+        return tech
+    return ""
+
+
+def run_section_analysis(
+    rag: RAGPipeline,
+    routing_mode: str,
+    section_key: str,
+    progress_callback=None,
+) -> Any:
+    """Run a single analysis section."""
     import time
 
     from config import API_CALL_DELAY_SECONDS
+
+    if section_key == "technical":
+        return run_technical_analysis(rag, routing_mode, progress_callback=progress_callback)
 
     if section_key not in PROMPTS:
         raise ValueError(f"Unknown analysis section: {section_key}")

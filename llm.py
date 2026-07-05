@@ -52,16 +52,17 @@ def get_deepseek_client() -> OpenAI:
     return _make_client(NVIDIA_DEEPSEEK_API_KEY)
 
 
-def _truncate_context(chunks: list[str]) -> str:
+def _truncate_context(chunks: list[str], max_chars: Optional[int] = None) -> str:
     """Cap total retrieved context to avoid oversized prompts and API timeouts."""
     if not chunks:
         return "No context available."
 
+    limit = max_chars or MAX_CONTEXT_CHARS
     parts: list[str] = []
     total = 0
     for chunk in chunks:
-        if total + len(chunk) > MAX_CONTEXT_CHARS:
-            remaining = MAX_CONTEXT_CHARS - total
+        if total + len(chunk) > limit:
+            remaining = limit - total
             if remaining > 400:
                 parts.append(chunk[:remaining])
             break
@@ -87,8 +88,7 @@ def _chat_with_retry(client: OpenAI, **kwargs):
                 raise
             if attempt >= API_MAX_RETRIES - 1:
                 raise
-            # Longer backoff for rate-limit / resource exhaustion (503)
-            wait = min(2 ** attempt * (8 if status == 503 else 4), 45)
+            wait = min(2 ** attempt * (10 if status == 503 else 5), 60)
             time.sleep(wait)
 
     if last_error:
@@ -133,25 +133,31 @@ def call_llm(
     context_chunks: list[str],
     routing_mode: RoutingMode,
     stream_callback: Optional[Callable[[str], None]] = None,
+    max_tokens: Optional[int] = None,
+    max_context_chars: Optional[int] = None,
+    temperature: float = 1.0,
 ) -> str:
-    """
-    Call the appropriate LLM based on routing mode.
-    Scanned PDFs → MiniMax-M3 | Text PDFs → DeepSeek-V4-Flash (both via NVIDIA NIM).
-    """
-    context = _truncate_context(context_chunks)
+    """Call the appropriate LLM based on routing mode."""
+    context = _truncate_context(context_chunks, max_chars=max_context_chars)
     user_message = (
         "Use the following excerpts from the tender document as your primary source. "
         "If information is not present, state 'Not specified in document'.\n\n"
         f"DOCUMENT EXCERPTS:\n{context}\n\n"
         f"TASK:\n{prompt}"
     )
+    tokens = max_tokens or LLM_MAX_TOKENS
 
     if routing_mode == "scanned":
-        return _call_minimax(user_message, stream_callback)
-    return _call_deepseek(user_message, stream_callback)
+        return _call_minimax(user_message, stream_callback, max_tokens=tokens, temperature=temperature)
+    return _call_deepseek(user_message, stream_callback, max_tokens=tokens, temperature=temperature)
 
 
-def _call_minimax(user_message: str, stream_callback: Optional[Callable[[str], None]] = None) -> str:
+def _call_minimax(
+    user_message: str,
+    stream_callback: Optional[Callable[[str], None]] = None,
+    max_tokens: int = LLM_MAX_TOKENS,
+    temperature: float = 1.0,
+) -> str:
     client = get_minimax_client()
     messages = [
         {"role": "system", "content": SYSTEM_PROMPT},
@@ -160,8 +166,8 @@ def _call_minimax(user_message: str, stream_callback: Optional[Callable[[str], N
     kwargs = {
         "model": MINIMAX_MODEL,
         "messages": messages,
-        "max_tokens": LLM_MAX_TOKENS,
-        "temperature": 1.0,
+        "max_tokens": max_tokens,
+        "temperature": temperature,
         "top_p": 0.95,
     }
 
@@ -178,7 +184,12 @@ def _call_minimax(user_message: str, stream_callback: Optional[Callable[[str], N
     return response.choices[0].message.content or ""
 
 
-def _call_deepseek(user_message: str, stream_callback: Optional[Callable[[str], None]] = None) -> str:
+def _call_deepseek(
+    user_message: str,
+    stream_callback: Optional[Callable[[str], None]] = None,
+    max_tokens: int = LLM_MAX_TOKENS,
+    temperature: float = 1.0,
+) -> str:
     client = get_deepseek_client()
     messages = [
         {"role": "system", "content": SYSTEM_PROMPT},
@@ -187,9 +198,9 @@ def _call_deepseek(user_message: str, stream_callback: Optional[Callable[[str], 
     kwargs = {
         "model": DEEPSEEK_MODEL,
         "messages": messages,
-        "temperature": 1.0,
+        "temperature": temperature,
         "top_p": 0.95,
-        "max_tokens": LLM_MAX_TOKENS,
+        "max_tokens": max_tokens,
     }
     if DEEPSEEK_ENABLE_THINKING:
         kwargs["extra_body"] = {

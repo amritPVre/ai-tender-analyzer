@@ -10,7 +10,7 @@ from typing import Any
 import pandas as pd
 import streamlit as st
 
-from analysis import ANALYSIS_SECTIONS, is_date_urgent, run_section_analysis
+from analysis import ANALYSIS_SECTIONS, get_combined_technical, is_date_urgent, run_section_analysis
 from config import COLORS, NVIDIA_DEEPSEEK_API_KEY, NVIDIA_MINIMAX_API_KEY
 from export import generate_excel_checklist, generate_pdf_report
 from pdf_extraction import detect_pdf_type, extract_document, is_solar_related
@@ -76,6 +76,11 @@ def init_session_state():
         if key not in st.session_state:
             st.session_state[key] = val
 
+    # Recover from interrupted runs (browser refresh / timeout mid-step)
+    for key, status in list(st.session_state.get("analysis_status", {}).items()):
+        if status == "running":
+            st.session_state["analysis_status"][key] = "pending"
+
 
 def _init_analysis_state():
     st.session_state["analysis"] = {}
@@ -109,7 +114,20 @@ def run_analysis_step(section_key: str) -> bool:
 
     st.session_state["analysis_status"][section_key] = "running"
     try:
-        result = run_section_analysis(rag, st.session_state["routing_mode"], section_key)
+        progress_label = st.empty() if section_key == "technical" else None
+
+        def step_progress(current, total, label):
+            if progress_label is not None:
+                progress_label.info(f"Technical part {current + 1}/{total}: **{label}**")
+
+        result = run_section_analysis(
+            rag,
+            st.session_state["routing_mode"],
+            section_key,
+            progress_callback=step_progress if section_key == "technical" else None,
+        )
+        if progress_label is not None:
+            progress_label.empty()
         st.session_state["analysis"][section_key] = result
         st.session_state["analysis_status"][section_key] = "done"
         st.session_state["analysis_errors"].pop(section_key, None)
@@ -242,7 +260,12 @@ def render_section_gate(section_key: str, label: str, render_fn):
 
     st.info(
         f"**{label}** has not been generated yet. "
-        "Use **Run Next Step** in the sidebar, or generate this section now."
+        + (
+            "This step runs **4 smaller AI calls** (Modules, BOS, Civil, Grid) — it may take 2–4 minutes. "
+            if section_key == "technical"
+            else ""
+        )
+        + "Use **Run Next Step** in the sidebar, or generate this section now."
     )
     if status == "error":
         st.error(st.session_state["analysis_errors"].get(section_key, "Unknown error"))
@@ -271,8 +294,12 @@ def render_analysis_sidebar():
     next_key = get_next_pending_section()
     if next_key:
         next_label = next(s["label"] for s in ANALYSIS_SECTIONS if s["key"] == next_key)
+        if next_key == "technical":
+            spinner_msg = "Running Technical Requirements (4 parts — may take 2–4 min)…"
+        else:
+            spinner_msg = f"Running: {next_label}…"
         if st.button("▶ Run Next Step", use_container_width=True, type="primary"):
-            with st.spinner(f"Running: {next_label}…"):
+            with st.spinner(spinner_msg):
                 run_analysis_step(next_key)
             st.rerun()
     else:
