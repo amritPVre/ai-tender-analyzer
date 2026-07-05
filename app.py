@@ -11,7 +11,7 @@ import pandas as pd
 import streamlit as st
 
 from analysis import ANALYSIS_SECTIONS, is_date_urgent, run_section_analysis
-from config import COLORS, NVIDIA_DEEPSEEK_API_KEY, NVIDIA_MINIMAX_API_KEY
+from config import COLORS, NVIDIA_DEEPSEEK_API_KEY, NVIDIA_MINIMAX_API_KEY, key_fingerprint, keys_configured
 from export import generate_excel_checklist, generate_pdf_report
 from pdf_extraction import detect_pdf_type, extract_document, is_solar_related
 from rag import RAGPipeline
@@ -92,6 +92,18 @@ def _init_analysis_state():
 
 def format_api_error(exc: Exception) -> str:
     err_msg = str(exc)
+    if "401" in err_msg or "Unauthorized" in err_msg or "Authentication failed" in err_msg:
+        return (
+            "NVIDIA API authentication failed (401). Your API key is missing, invalid, or expired. "
+            "On Streamlit Cloud, open **App settings → Secrets** and set:\n\n"
+            "```toml\n"
+            "NVIDIA_MINIMAX_API_KEY = \"nvapi-...\"\n"
+            "NVIDIA_DEEPSEEK_API_KEY = \"nvapi-...\"\n"
+            "```\n\n"
+            "Or use one shared key:\n"
+            "`NVIDIA_API_KEY = \"nvapi-...\"`\n\n"
+            "Get keys from https://build.nvidia.com — keys must start with `nvapi-`."
+        )
     if "503" in err_msg or "ResourceExhausted" in err_msg:
         return (
             "NVIDIA API rate limit reached (503). Wait a moment, then run the next step again. "
@@ -711,6 +723,21 @@ def main():
             "Solar Tender Intelligence v1.0<br>Powered by BAESS.APP</p>",
             unsafe_allow_html=True,
         )
+
+        st.markdown("---")
+        st.markdown("### 🔑 API Keys")
+        cfg = keys_configured()
+        if cfg["deepseek"]:
+            fp = key_fingerprint(NVIDIA_DEEPSEEK_API_KEY)
+            st.caption(f"DeepSeek key: `{fp}`")
+            if not NVIDIA_DEEPSEEK_API_KEY.startswith("nvapi-"):
+                st.warning("DeepSeek key should start with `nvapi-`. Check your Secrets.")
+        else:
+            st.error("DeepSeek key missing — add NVIDIA_DEEPSEEK_API_KEY to Secrets.")
+        if cfg["minimax"]:
+            st.caption(f"MiniMax key: `{key_fingerprint(NVIDIA_MINIMAX_API_KEY)}`")
+        else:
+            st.caption("MiniMax key not set (only needed for scanned PDFs).")
 
     # ---- Main content ----
     if not st.session_state.get("doc_ready"):

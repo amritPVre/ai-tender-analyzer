@@ -6,9 +6,49 @@ from dotenv import load_dotenv
 
 load_dotenv()
 
-# NVIDIA NIM API keys (local: .env | Streamlit Cloud: app Secrets)
-NVIDIA_MINIMAX_API_KEY = os.getenv("NVIDIA_MINIMAX_API_KEY", "")
-NVIDIA_DEEPSEEK_API_KEY = os.getenv("NVIDIA_DEEPSEEK_API_KEY", "")
+
+def _clean_key(value: str) -> str:
+    """Strip whitespace and accidental surrounding quotes from API keys."""
+    if not value:
+        return ""
+    value = value.strip()
+    if len(value) >= 2 and value[0] == value[-1] and value[0] in ('"', "'"):
+        value = value[1:-1].strip()
+    return value
+
+
+def _load_secret(name: str) -> str:
+    """Load from environment variables or Streamlit Cloud secrets."""
+    value = _clean_key(os.getenv(name, ""))
+    if value:
+        return value
+
+    try:
+        import streamlit as st
+
+        if name in st.secrets:
+            return _clean_key(str(st.secrets[name]))
+    except Exception:
+        pass
+
+    return ""
+
+
+def _resolve_keys() -> tuple[str, str]:
+    """Resolve MiniMax and DeepSeek keys with optional shared fallback."""
+    minimax = _load_secret("NVIDIA_MINIMAX_API_KEY")
+    deepseek = _load_secret("NVIDIA_DEEPSEEK_API_KEY")
+    shared = _load_secret("NVIDIA_API_KEY")
+
+    if not minimax and shared:
+        minimax = shared
+    if not deepseek and shared:
+        deepseek = shared
+
+    return minimax, deepseek
+
+
+NVIDIA_MINIMAX_API_KEY, NVIDIA_DEEPSEEK_API_KEY = _resolve_keys()
 
 # NVIDIA integrate API
 NVIDIA_API_BASE_URL = "https://integrate.api.nvidia.com/v1"
@@ -51,3 +91,19 @@ SYSTEM_PROMPT = (
     "MNRE, SECI, CPWD, and international solar procurement standards. "
     "You analyze tender documents with engineering precision."
 )
+
+
+def key_fingerprint(key: str) -> str:
+    """Safe preview for UI/debugging without exposing full secret."""
+    if not key:
+        return "not set"
+    if len(key) <= 12:
+        return "set (too short — check key)"
+    return f"{key[:8]}…{key[-4:]}"
+
+
+def keys_configured() -> dict[str, bool]:
+    return {
+        "minimax": bool(NVIDIA_MINIMAX_API_KEY),
+        "deepseek": bool(NVIDIA_DEEPSEEK_API_KEY),
+    }
