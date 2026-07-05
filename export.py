@@ -12,8 +12,15 @@ from reportlab.lib.styles import ParagraphStyle, getSampleStyleSheet
 from reportlab.lib.units import cm
 from reportlab.platypus import Paragraph, SimpleDocTemplate, Spacer
 
-from analysis import get_combined_technical
 from config import COLORS
+
+
+def _get_technical_text(analysis: dict) -> str:
+    """Return combined technical markdown from analysis results."""
+    if not analysis:
+        return ""
+    tech = analysis.get("technical")
+    return tech if isinstance(tech, str) else ""
 
 
 def _safe_str(value: Any, default: str = "Not specified") -> str:
@@ -92,7 +99,7 @@ def generate_pdf_report(
 
     # Section 2 — Technical
     story.append(Paragraph("2. Technical Requirements", heading_style))
-    tech = get_combined_technical(analysis)
+    tech = _get_technical_text(analysis)
     for line in tech.replace("\r", "").split("\n"):
         if line.strip():
             story.append(Paragraph(line.replace("&", "&amp;"), body_style))

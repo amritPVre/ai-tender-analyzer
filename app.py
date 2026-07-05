@@ -10,7 +10,7 @@ from typing import Any
 import pandas as pd
 import streamlit as st
 
-from analysis import ANALYSIS_SECTIONS, get_combined_technical, is_date_urgent, run_section_analysis
+from analysis import ANALYSIS_SECTIONS, is_date_urgent, run_section_analysis
 from config import COLORS, NVIDIA_DEEPSEEK_API_KEY, NVIDIA_MINIMAX_API_KEY
 from export import generate_excel_checklist, generate_pdf_report
 from pdf_extraction import detect_pdf_type, extract_document, is_solar_related

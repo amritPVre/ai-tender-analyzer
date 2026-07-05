@@ -1,12 +1,14 @@
 """RAG pipeline: chunking, embedding, FAISS indexing, retrieval."""
 
-from typing import Optional
+from typing import TYPE_CHECKING, Optional
 
-import faiss
 import numpy as np
-from sentence_transformers import SentenceTransformer
 
 from config import CHUNK_CHARS, OVERLAP_CHARS, RETRIEVE_K
+
+if TYPE_CHECKING:
+    import faiss
+    from sentence_transformers import SentenceTransformer
 
 EMBED_MODEL_NAME = "all-MiniLM-L6-v2"
 
@@ -15,13 +17,15 @@ class RAGPipeline:
     """Local RAG pipeline without LangChain."""
 
     def __init__(self):
-        self.model: Optional[SentenceTransformer] = None
-        self.index: Optional[faiss.IndexFlatL2] = None
+        self.model: Optional["SentenceTransformer"] = None
+        self.index: Optional["faiss.IndexFlatL2"] = None
         self.chunks: list[str] = []
         self.document_text: str = ""
 
-    def _get_model(self) -> SentenceTransformer:
+    def _get_model(self):
         if self.model is None:
+            from sentence_transformers import SentenceTransformer
+
             self.model = SentenceTransformer(EMBED_MODEL_NAME)
         return self.model
 
@@ -49,6 +53,8 @@ class RAGPipeline:
 
     def build(self, document_text: str) -> int:
         """Chunk, embed, and index document. Returns chunk count."""
+        import faiss
+
         self.document_text = document_text
         self.chunks = self.chunk_text(document_text)
 

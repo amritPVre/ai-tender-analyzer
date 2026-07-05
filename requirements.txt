@@ -1,15 +1,15 @@
+--extra-index-url https://download.pytorch.org/whl/cpu
 streamlit>=1.32.0
 openai>=1.50.0
 pdfplumber>=0.11.0
 pdf2image>=1.17.0
 Pillow>=10.0.0
-faiss-cpu>=1.8.0
---extra-index-url https://download.pytorch.org/whl/cpu
+numpy>=1.26.0
+pandas>=2.0.0
 torch>=2.2.0
 torchvision>=0.17.0
+faiss-cpu>=1.8.0
 sentence-transformers>=3.0.0,<6.0.0
 python-dotenv>=1.0.0
 reportlab>=4.0.0
 openpyxl>=3.1.0
-numpy>=1.26.0
-pandas>=2.0.0
